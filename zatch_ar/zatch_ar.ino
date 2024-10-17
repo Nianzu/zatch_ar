@@ -5,6 +5,9 @@
 #define USE_TFT_ESPI_LIBRARY
 #include "lv_xiao_round_screen.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 // TFT_eSPI tft = TFT_eSPI();
 TFT_eSprite img = TFT_eSprite(&tft);
 I2C_BM8563 rtc(I2C_BM8563_DEFAULT_ADDRESS, Wire);
@@ -46,29 +49,14 @@ int currentScreen = 0;
 lv_coord_t touchX, touchY;
 uint32_t primary_color = WHITE;
 
-void setup(void)
-{
-  tft.begin();
-  Serial.begin(9600);
-
-  // Start I2C and RTC
-  Wire.begin();
-  rtc.begin();
-
-  pinMode(TOUCH_INT, INPUT_PULLUP);
-
-  tft.setRotation(0);
-  tft.fillScreen(BLACK);
-
-  img.setColorDepth(16);
-}
-
 double currentTime = 0;
 I2C_BM8563_TimeTypeDef timeStruct;
 
-void loop()
+int currentBattery = 0;
+
+void state_machine_task(void * pvParameters)
 {
-  if (millis() - runTime >= 0L)
+  while(1)
   {
     runTime = millis();
     switch (currentScreen)
@@ -90,7 +78,7 @@ void loop()
         int16_t textHeight = 24;  // Adjust based on text size
         img.fillRect(center_x - (textWidth/2), center_y, textWidth, textHeight, BLACK);
         img.setTextSize(2);
-        img.drawCentreString(String(battery_level_percent())+"%" ,center_x,center_y,1);
+        img.drawCentreString(String(currentBattery)+"%" ,center_x,center_y,1);
         img.pushSprite(0, 0, TFT_TRANSPARENT);
         img.deleteSprite();
 
@@ -142,7 +130,7 @@ void loop()
   }
 }
 
-int32_t battery_level_percent(void)
+void battery_level_percent(TimerHandle_t xTimer)
 {
   int32_t mvolts = 0;
   for(int8_t i=0; i<NUM_ADC_SAMPLE; i++){
@@ -151,7 +139,8 @@ int32_t battery_level_percent(void)
   mvolts /= NUM_ADC_SAMPLE;
   int32_t level = (mvolts - BATTERY_DEFICIT_VOL) * 100 / (BATTERY_FULL_VOL-BATTERY_DEFICIT_VOL); // 1850 ~ 2100
   level = (level<0) ? 0 : ((level>100) ? 100 : level); 
-  return level;
+  currentBattery = level;
+  printf("Got bat level as %d\n",currentBattery);
 }
 
 void drawClock(double minutes)
@@ -192,4 +181,30 @@ void drawClock(double minutes)
 
   img.pushSprite(0, 0, TFT_TRANSPARENT);
   img.deleteSprite();
+}
+
+void setup()
+{
+  tft.begin();
+  Serial.begin(9600);
+
+  // Start I2C and RTC
+  Wire.begin();
+  rtc.begin();
+
+  pinMode(TOUCH_INT, INPUT_PULLUP);
+
+  tft.setRotation(0);
+  tft.fillScreen(BLACK);
+
+  img.setColorDepth(16);
+
+  xTaskCreate(&state_machine_task, "state_machine_task", 4096, NULL,5,NULL);
+  xTimerStart(xTimerCreate("battery_monitor",pdMS_TO_TICKS( 1000 ),pdTRUE,NULL,&battery_level_percent ),0);
+  
+  vTaskDelete(NULL);
+}
+void loop()
+{
+  vTaskDelete(NULL);
 }
