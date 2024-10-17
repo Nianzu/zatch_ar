@@ -9,6 +9,11 @@
 TFT_eSprite img = TFT_eSprite(&tft);
 I2C_BM8563 rtc(I2C_BM8563_DEFAULT_ADDRESS, Wire);
 
+#define NUM_ADC_SAMPLE 20
+#define BATTERY_DEFICIT_VOL 1850
+#define BATTERY_FULL_VOL 2450 
+
+
 // https://rgbcolorpicker.com/565
 #define WHITE 0xFFFF
 #define BLACK 0x0000
@@ -23,6 +28,16 @@ I2C_BM8563 rtc(I2C_BM8563_DEFAULT_ADDRESS, Wire);
 #define SCALE1 0x5DEE
 
 #define DEG2RAD 0.0174532925
+
+// TL_DATUM = 0 = Top left
+// TC_DATUM = 1 = Top centre
+// TR_DATUM = 2 = Top right
+// ML_DATUM = 3 = Middle left
+// MC_DATUM = 4 = Middle centre
+// MR_DATUM = 5 = Middle right
+// BL_DATUM = 6 = Bottom left
+// BC_DATUM = 7 = Bottom centre
+// BR_DATUM = 8 = Bottom right
 
 uint32_t runTime = -99999;
 double center_x = 120;
@@ -67,6 +82,18 @@ void loop()
       }
       else
       {
+        
+        img.createSprite(240, 240);
+        img.fillScreen(TFT_TRANSPARENT);
+
+        int16_t textWidth = img.textWidth("000");   // Estimate the maximum width for a 3-digit number
+        int16_t textHeight = 24;  // Adjust based on text size
+        img.fillRect(center_x - (textWidth/2), center_y, textWidth, textHeight, BLACK);
+        img.setTextSize(2);
+        img.drawCentreString(String(battery_level_percent())+"%" ,center_x,center_y,1);
+        img.pushSprite(0, 0, TFT_TRANSPARENT);
+        img.deleteSprite();
+
         rtc.getTime(&timeStruct);
         drawClock(timeStruct.hours * 60 + timeStruct.minutes + timeStruct.seconds / 60.0);
       }
@@ -113,6 +140,18 @@ void loop()
 
     yield();
   }
+}
+
+int32_t battery_level_percent(void)
+{
+  int32_t mvolts = 0;
+  for(int8_t i=0; i<NUM_ADC_SAMPLE; i++){
+    mvolts += analogReadMilliVolts(D0);
+  }
+  mvolts /= NUM_ADC_SAMPLE;
+  int32_t level = (mvolts - BATTERY_DEFICIT_VOL) * 100 / (BATTERY_FULL_VOL-BATTERY_DEFICIT_VOL); // 1850 ~ 2100
+  level = (level<0) ? 0 : ((level>100) ? 100 : level); 
+  return level;
 }
 
 void drawClock(double minutes)
