@@ -7,15 +7,20 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <WiFi.h>
 
 // TFT_eSPI tft = TFT_eSPI();
 TFT_eSprite img = TFT_eSprite(&tft);
 I2C_BM8563 rtc(I2C_BM8563_DEFAULT_ADDRESS, Wire);
 
+const char *ntpServer = "time.cloudflare.com";
+const char *ssid = "ST";
+const char *password = "test1234";
+// TimerHandle_t hp_timer;
+
 #define NUM_ADC_SAMPLE 20
 #define BATTERY_DEFICIT_VOL 1850
-#define BATTERY_FULL_VOL 2450 
-
+#define BATTERY_FULL_VOL 2450
 
 // https://rgbcolorpicker.com/565
 #define WHITE 0xFFFF
@@ -25,12 +30,15 @@ I2C_BM8563 rtc(I2C_BM8563_DEFAULT_ADDRESS, Wire);
 #define GREEN 0x07E0
 #define YELLOW 0xFFE0
 #define GREY 0x4a49
+#define TEAL 0x063f
 #define DARK_GREY 0x3186
 #define TEXT_COLOR 0xFFFF
 #define SCALE0 0xC655
 #define SCALE1 0x5DEE
 
 #define DEG2RAD 0.0174532925
+
+#define BATLVLFORHP 25
 
 // TL_DATUM = 0 = Top left
 // TC_DATUM = 1 = Top centre
@@ -42,10 +50,8 @@ I2C_BM8563 rtc(I2C_BM8563_DEFAULT_ADDRESS, Wire);
 // BC_DATUM = 7 = Bottom centre
 // BR_DATUM = 8 = Bottom right
 
-uint32_t runTime = -99999;
 double center_x = 120;
 double center_y = 120;
-int currentScreen = 0;
 lv_coord_t touchX, touchY;
 uint32_t primary_color = WHITE;
 
@@ -54,11 +60,13 @@ I2C_BM8563_TimeTypeDef timeStruct;
 
 int currentBattery = 0;
 
-void state_machine_task(void * pvParameters)
+bool is_high_power = false;
+
+void state_machine_task(void *pvParameters)
 {
-  while(1)
+  int currentScreen = 0;
+  while (1)
   {
-    runTime = millis();
     switch (currentScreen)
     {
     case 0:
@@ -70,19 +78,8 @@ void state_machine_task(void * pvParameters)
       }
       else
       {
-        
-        img.createSprite(240, 240);
-        img.fillScreen(TFT_TRANSPARENT);
-
-        int16_t textWidth = img.textWidth("000");   // Estimate the maximum width for a 3-digit number
-        int16_t textHeight = 24;  // Adjust based on text size
-        img.fillRect(center_x - (textWidth/2), center_y, textWidth, textHeight, BLACK);
-        img.setTextSize(2);
-        img.drawCentreString(String(currentBattery)+"%" ,center_x,center_y,1);
-        img.pushSprite(0, 0, TFT_TRANSPARENT);
-        img.deleteSprite();
-
         rtc.getTime(&timeStruct);
+        printf("%d H %d m %d s\n", timeStruct.hours, timeStruct.minutes, timeStruct.seconds);
         drawClock(timeStruct.hours * 60 + timeStruct.minutes + timeStruct.seconds / 60.0);
       }
       break;
@@ -117,9 +114,9 @@ void state_machine_task(void * pvParameters)
         int arrow_y = 65;
         img.fillTriangle(arrow_x, arrow_y, arrow_x + 15, arrow_y + 10, arrow_x + 15, arrow_y - 10, primary_color);
         img.fillRect(arrow_x + 15, arrow_y - 2, 15, 5, primary_color);
-        img.fillCircle(180,60,10,RED);
-        img.fillCircle(180,180,10,BLUE);
-        img.fillCircle(60,180,10,WHITE);
+        img.fillCircle(180, 60, 10, RED);
+        img.fillCircle(180, 180, 10, BLUE);
+        img.fillCircle(60, 180, 10, WHITE);
         img.pushSprite(0, 0, TFT_TRANSPARENT);
         img.deleteSprite();
       }
@@ -130,17 +127,95 @@ void state_machine_task(void * pvParameters)
   }
 }
 
+void high_power_task(void *pvParameters)
+{
+  int state = 0;
+  while (1)
+  {
+    switch (state)
+    {
+    case 0: // Low power
+      if (currentBattery > BATLVLFORHP)
+      {
+        state = 1;
+        is_high_power = true;
+      }
+      break;
+    case 1: // Go to high power
+      state = 2;
+      break;
+    case 2: // Hight power
+      if (currentBattery < BATLVLFORHP)
+      {
+        state = 3;
+      }
+      break;
+    case 3: // Go to low power
+      state = 0;
+      is_high_power = false;
+      break;
+    }
+
+    // if (currentBattery < BATLVLFORHP)
+    // {
+    //   xTimerStop(hp_timer, 0);
+    // }
+    // // Connect to an access point
+    // Serial.print("Connecting to Wi-Fi ");
+    // WiFi.begin(ssid, password);
+    // Serial.print(" At this point ");
+    // while (WiFi.status() != WL_CONNECTED)
+    // {
+    //   delay(500);
+    //   Serial.print(".");
+    // }
+    // Serial.println(" CONNECTED");
+
+    // // Set ntp time to local
+    // configTime(6 * 3600, 0, ntpServer);
+
+    // // Get local time
+    // struct tm timeInfo;
+    // if (getLocalTime(&timeInfo))
+    // {
+    //   printf("Got local time");
+    //   // Set RTC time
+    //   I2C_BM8563_TimeTypeDef timeStruct;
+    //   timeStruct.hours = timeInfo.tm_hour;
+    //   timeStruct.minutes = timeInfo.tm_min;
+    //   timeStruct.seconds = timeInfo.tm_sec;
+    //   rtc.setTime(&timeStruct);
+
+    //   // Set RTC Date
+    //   I2C_BM8563_DateTypeDef dateStruct;
+    //   dateStruct.weekDay = timeInfo.tm_wday;
+    //   dateStruct.month = timeInfo.tm_mon + 1;
+    //   dateStruct.date = timeInfo.tm_mday;
+    //   dateStruct.year = timeInfo.tm_year + 1900;
+    //   rtc.setDate(&dateStruct);
+    // }
+    vTaskDelay(pdMS_TO_TICKS(1000));
+  }
+}
+
 void battery_level_percent(TimerHandle_t xTimer)
 {
   int32_t mvolts = 0;
-  for(int8_t i=0; i<NUM_ADC_SAMPLE; i++){
+  for (int8_t i = 0; i < NUM_ADC_SAMPLE; i++)
+  {
     mvolts += analogReadMilliVolts(D0);
   }
   mvolts /= NUM_ADC_SAMPLE;
-  int32_t level = (mvolts - BATTERY_DEFICIT_VOL) * 100 / (BATTERY_FULL_VOL-BATTERY_DEFICIT_VOL); // 1850 ~ 2100
-  level = (level<0) ? 0 : ((level>100) ? 100 : level); 
+  int32_t level = (mvolts - BATTERY_DEFICIT_VOL) * 100 / (BATTERY_FULL_VOL - BATTERY_DEFICIT_VOL); // 1850 ~ 2100
+  level = (level < 0) ? 0 : ((level > 100) ? 100 : level);
+  int prev_Battery = currentBattery;
   currentBattery = level;
-  printf("Got bat level as %d\n",currentBattery);
+
+  // if (currentBattery > BATLVLFORHP && prev_Battery < BATLVLFORHP)
+  // {
+  //   printf("Starting HP task\n");
+  //   xTimerStart(hp_timer, 0);
+  // }
 }
 
 void drawClock(double minutes)
@@ -177,7 +252,17 @@ void drawClock(double minutes)
   double hour_hand_angle = ((minutes * 360 / 720) - 90) * DEG2RAD;
   x = 96 * cos(hour_hand_angle) + center_x;
   y = 96 * sin(hour_hand_angle) + center_y;
-  img.fillCircle(x, y, 3, primary_color);
+  img.fillCircle(x, y, 5, primary_color);
+
+  // Draw the battery level
+  int16_t textWidth = img.textWidth("000"); // Estimate the maximum width for a 3-digit number
+  int16_t textHeight = 24;                  // Adjust based on text size
+  img.fillRect(center_x - (textWidth / 2), 180, textWidth, textHeight, BLACK);
+  img.setTextSize(2);
+  img.drawCentreString(String(currentBattery) + "%", center_x, 180, 1);
+
+  // Update the high power indicator
+  img.drawSmoothArc(center_x, center_y, 72, 65, 140, 220, is_high_power ? TEAL : BLACK, BLACK, true);
 
   img.pushSprite(0, 0, TFT_TRANSPARENT);
   img.deleteSprite();
@@ -185,6 +270,9 @@ void drawClock(double minutes)
 
 void setup()
 {
+  // WiFi.mode(WIFI_STA);
+  // WiFi.disconnect();
+
   tft.begin();
   Serial.begin(9600);
 
@@ -199,9 +287,11 @@ void setup()
 
   img.setColorDepth(16);
 
-  xTaskCreate(&state_machine_task, "state_machine_task", 4096, NULL,5,NULL);
-  xTimerStart(xTimerCreate("battery_monitor",pdMS_TO_TICKS( 1000 ),pdTRUE,NULL,&battery_level_percent ),0);
-  
+  xTaskCreate(&state_machine_task, "state_machine_task", 4096, NULL, 5, NULL);
+  xTimerStart(xTimerCreate("battery_monitor", pdMS_TO_TICKS(1000), pdTRUE, NULL, &battery_level_percent), 0);
+  xTaskCreate(&high_power_task, "high_power_task", 4096, NULL, 5, NULL);
+  // hp_timer = xTimerCreate("high_power", pdMS_TO_TICKS(10000), pdTRUE, NULL, &high_power_timer);
+
   vTaskDelete(NULL);
 }
 void loop()
